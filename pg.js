@@ -11,7 +11,6 @@ const configuration = {
   application_name: 'psql'
 }
 
-
 function parseMsg(buffer) {
   if (buffer.length === 0) return [{}, buffer]
   const header = new Buffer([buffer[0]]).toString()
@@ -54,6 +53,9 @@ const payloadParser = {
 }
 
 // ////// ////// write messages ///// ////// ////// ////// ////
+function hexToBuffer(hexString) {
+  return new Buffer(hexString.replace(/ /g, ''), 'hex')
+}
 
 function createQueryMessage(payload) {
   // allocate a new buffer with space for the payload, a type byte, and 4 message length
@@ -85,61 +87,98 @@ const clientConfigMessage = "0000 0041 0003 0000 " +
 
 const fullStartupMessage = initialStartupMessage.concat(clientConfigMessage)
 
-getClient(PGPORT)
-.then((client) => {
-  // attach startup listener and write client startup messages
-  console.log('got client, attaching listeners')
-  client.on('data', (data) => console.log('receieved Data:', data.toString()))
-  client.on('error', (err) => console.log('ERROR:', err))
-  client.on('end', () => console.log('disconnected from server'));
-  client.on('close', (had_error) => console.log('client connection closed', had_error));
-  return client
-})
-.then((client) => {
-  console.log('writing startup messages')
-  // client.write(startConnectionMessage)
-  client.write(Buffer.from(fullStartupMessage.replace(/ /g, ''), 'hex'))
-  // client.write(Buffer.concat([startConnectionMessage, configMessage]), totalLength)
-  // const query = createQueryMessage('select 1')
-  // client.write(querys, query.length)
-  return client
-})
+// getClient(PGPORT)
+// .then((client) => {
+//   // attach startup listener and write client startup messages
+//   console.log('got client, attaching listeners')
+//   client.on('data', (data) => console.log('receieved Data:', data.toString()))
+//   client.on('error', (err) => console.log('ERROR:', err))
+//   client.on('end', () => console.log('disconnected from server'));
+//   client.on('close', (had_error) => console.log('client connection closed', had_error));
+//   return client
+// })
+// .then((client) => {
+//   console.log('writing startup messages')
+//   client.write(Buffer.from(fullStartupMessage.replace(/ /g, ''), 'hex'))
+//   return client
+// })
+// .then((client) => {
+//   console.log('trying a sample query')
+//   const query = createQueryMessage('select 1')
+//   client.write(query)
+// })
 
 
-// READ TESTS
-function hexToBuffer(hexString) {
-  return new Buffer(hexString.replace(/ /g, ''), 'hex')
+// Test framework
+function test(name, callback) {
+  try {
+    callback()
+  } catch (e) {
+    console.error(`Failed: ${name}`)
+    console.error(e)
+    process.exit(1)
+  }
+  console.log(`Passed: ${name}`)
 }
-assert.equal(hexToBuffer("5300 0000 1a61").length, 6, 'hexToBuffer broken')
-console.log('hexToBuffer: okay')
 
-const fullServerSMessage = hexToBuffer("5300 0000 1a61 7070 6c69 6361 7469 6f6e 5f6e 616d 6500 7073 716c 00")
-assert.equal(parseMsg(fullServerSMessage)[0].header, 'S', 'Broke message type parsing')
-assert.equal(parseMsg(fullServerSMessage)[0].length, 26, 'Broke length parsing')
-assert.deepEqual(payloadParser.S(parseMsg(fullServerSMessage)[0].payload), {application_name: 'psql'}, '\'S\' parser broken')
-console.log('fullServerSMessage: okay')
+test('hexToBuffer', () => {
+  const actual = hexToBuffer("5300 0000 1a61").length
+  const expected = 6
+  assert.deepEqual(actual, expected)
+})
 
-const partialServerSMessage = hexToBuffer("5300 0000 1a61 7070 6c69 6361 7469")
-assert.equal(parseMsg(partialServerSMessage)[0].header, 'S', 'Broke message type parsing')
-assert.equal(parseMsg(partialServerSMessage)[0].length, 26, 'Broke length parsing')
-assert.equal(parseMsg(partialServerSMessage)[0].payload, null, 'Partial messages should not return payloads')
-assert.equal(parseMsg(partialServerSMessage)[1].length, 14, 'Partial buffers should not be mutated')
-console.log('partialServerSMessage: okay')
+test('createQueryMessage \'select 1\'', () => {
+  const actual = createQueryMessage('select 1')
+  const expected = Buffer.from("510000000d73656c656374203100", 'hex')
+  assert.equal(actual.equals(expected), true)
+})
+test('createQueryMessage query type code', () => {
+  const actual = Buffer.from([createQueryMessage('')[0]])
+  const expected = 'Q'
+  assert.equal(actual, expected)
+})
+test('createQueryMessage length', () => {
+  const actual = createQueryMessage('').readInt32BE(1)
+  const expected = '5'
+  assert.equal(actual, expected)
+})
+test('createQueryMessage end with nullByte', () => {
+  const queryBuffer = createQueryMessage('')
+  const actual = Buffer.from([queryBuffer[queryBuffer.length - 1]])
+  const expected = '\00'
+  assert.equal(actual, expected)
+})
 
-assert.deepEqual(parseMsg(new Buffer([])), [{}, new Buffer([])], 'broke parsing empty buffer')
-console.log('emptyServerMessage: okay')
+test('parseMsg: full', () => {
+  const fullServerSMessage = hexToBuffer(
+    "5300 0000 1a61 7070 6c69 6361 7469 6f6e 5f6e 616d 6500 7073 716c 00"
+  )
+  const parsedMessage = parseMsg(fullServerSMessage);
+  assert.equal(parsedMessage[0].header, 'S', 'Message type')
+  assert.equal(parsedMessage[0].length, 26, 'Message length')
+})
 
-const fullServerMessageSet = hexToBuffer("5300 0000 1a61 7070 6c69 6361 7469 6f6e 5f6e 616d 6500 7073 716c 0053 0000 0019 636c 6965 6e74 5f65 6e63 6f64 696e 6700 5554 4638 0053 0000 0017 4461 7465 5374 796c 6500 4953 4f2c 204d 4459 0053 0000 0019 696e 7465 6765 725f 6461 7465 7469 6d65 7300 6f6e 0053 0000 001b 496e 7465 7276 616c 5374 796c 6500 706f 7374 6772 6573 0053 0000 0014 6973 5f73 7570 6572 7573 6572 006f 6e00 5300 0000 1973 6572 7665 725f 656e 636f 6469 6e67 0055 5446 3800 5300 0000 1973 6572 7665 725f 7665 7273 696f 6e00 392e 342e 3500 5300 0000 2573 6573 7369 6f6e 5f61 7574 686f 7269 7a61 7469 6f6e 0061 6c65 7863 7573 6163 6b00 5300 0000 2373 7461 6e64 6172 645f 636f 6e66 6f72 6d69 6e67 5f73 7472 696e 6773 006f 6e00 5300 0000 1854 696d 655a 6f6e 6500 5553 2f50 6163 6966 6963 004b 0000 000c 0000 a1f6 6efa 2558 5a00 0000 0549 5400 0000 2100 013f 636f 6c75 6d6e 3f00 0000 0000 0000 0000 0017 0004 ffff ffff 0000 4400 0000 0b00 0100 0000 0131 4300 0000 0d53 454c 4543 5420 3100 5a00 0000 0549")
+test('parseMsg: partial', () => {
+  const partialServerSMessage = hexToBuffer("5300 0000 1a61 7070 6c69 6361 7469")
+  const parsedPartialMessage = parseMsg(partialServerSMessage)
+  assert.equal(parsedPartialMessage[0].header, 'S')
+  assert.equal(parsedPartialMessage[0].length, 26)
+  assert.equal(parsedPartialMessage[0].payload, null)
+  assert.equal(parsedPartialMessage[1].length, 14)
+})
 
-getReponse(fullServerMessageSet)
-console.log('getReponse (fullServerMessageSet): okay')
+test('parseMsg: empty buffer', () => {
+  const actual = parseMsg(new Buffer([]))
+  const expected = [{}, new Buffer([])]
+  assert.deepEqual(actual, expected)
+})
 
-// WRITE TESTS
-assert.equal(createQueryMessage('select 1').equals(Buffer.from("510000000d73656c656374203100", 'hex')), true)
-assert.equal(Buffer.from([createQueryMessage('')[0]]), 'Q')
-assert.equal(createQueryMessage('').readInt32BE(1), '5', 'Failed: Empty querys should have length of 5')
-assert.equal(Buffer.from([createQueryMessage('')[createQueryMessage('').length - 1]]), '\00', 'Failed: Messages should end with nullbyte')
-console.log('createMessageSimpleQuery: okay')
-
-
-// async tests
+test('payloadParser: \'S\'', () => {
+  const fullServerSMessage = hexToBuffer(
+    "5300 0000 1a61 7070 6c69 6361 7469 6f6e 5f6e 616d 6500 7073 716c 00"
+  )
+  const payload =parseMsg(fullServerSMessage)[0].payload
+  const actual = payloadParser.S(payload)
+  const expected = {application_name: 'psql'}
+  assert.deepEqual(actual, expected)
+})
