@@ -66,6 +66,45 @@ function createQueryMessage(payload) {
   return buff
 }
 
+function getClient(port) {
+  return new Promise((resolve, reject) => {
+    client = net.connect({port: port}, () => {
+      console.log(`Successful socket connection to ${port}`)
+      return resolve(client)
+    })
+  })
+}
+
+const initialStartupMessage = "0000 0008 04d2 162f"
+
+const clientConfigMessage = "0000 0041 0003 0000 " +
+"7573 6572 0061 6c65 7863 7573 6163 6b00 " +
+"6461 7461 6261 7365 0070 6f73 7467 7265 " +
+"7300 6170 706c 6963 6174 696f 6e5f 6e61 " +
+"6d65 0070 7371 6c00 00"
+
+const fullStartupMessage = initialStartupMessage.concat(clientConfigMessage)
+
+getClient(PGPORT)
+.then((client) => {
+  // attach startup listener and write client startup messages
+  console.log('got client, attaching listeners')
+  client.on('data', (data) => console.log('receieved Data:', data.toString()))
+  client.on('error', (err) => console.log('ERROR:', err))
+  client.on('end', () => console.log('disconnected from server'));
+  client.on('close', (had_error) => console.log('client connection closed', had_error));
+  return client
+})
+.then((client) => {
+  console.log('writing startup messages')
+  // client.write(startConnectionMessage)
+  client.write(Buffer.from(fullStartupMessage.replace(/ /g, ''), 'hex'))
+  // client.write(Buffer.concat([startConnectionMessage, configMessage]), totalLength)
+  // const query = createQueryMessage('select 1')
+  // client.write(querys, query.length)
+  return client
+})
+
 
 // READ TESTS
 function hexToBuffer(hexString) {
