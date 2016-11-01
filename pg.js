@@ -120,7 +120,8 @@ getClient.documentation = `takes an options object and returns a Promise of a cl
 module.exports = {
   parseBuffer: parseBuffer,
   payloadParser: payloadParser,
-  createQueryMessage: createQueryMessage
+  createQueryMessage: createQueryMessage,
+  test: test
 }
 
 // Test framework
