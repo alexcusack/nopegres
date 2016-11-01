@@ -124,7 +124,7 @@ module.exports = {
   test: test
 }
 
-// Test framework
+// Test
 function test(name, callback) {
   try {
     callback()
