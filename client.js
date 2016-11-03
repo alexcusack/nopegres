@@ -30,9 +30,51 @@ const messageHandlers = {
   Z: readyForQuery,                            // ready for query
 }
 
+
+class QueryResult extends EventEmitter {
+  constructor(Client, sql) {
+    super()
+    this.client = Client
+    this.connection = Client.client // this.client = socket connection
+    this.sql = sql
+    this.rowDescriptions = []
+    this.buffer = Buffer.from([])
+  }
+
+  run() {
+    this.client._changeStatus('querying')
+    this.connection.on('data', this.handleResultData.bind(this))
+    this.connection.write(createQueryMessage(this.sql))
+  }
+
+  handleResultData(data) {
+    let message = {payload: true} // initilize to true for first iteration
+    this.buffer = Buffer.concat([this.buffer, data], this.buffer.length + data.length)
+    while (message.payload) {
+      const t = parseBuffer(this.buffer)
+      message = t.shift()
+      this.buffer = t.shift()
+      if (message.payload) this.handleMessage(message)
+    }
+  }
+
+  handleMessage(message) {
+    console.log('query res:', message.header, message.payload.toString())
+    switch (message.header) {
+      case 'Z':
+        this.emit('done')
+        this.client.client.removeAllListeners('data')
+        this.client._changeStatus('readyForQuery')
+        break;
+    }
+  }
+}
+
+
 class Client extends EventEmitter {
   constructor(options) {
     super()
+    this.status = 'initilized'
     this.queryQueue = []
     this.rowDescriptions = [] // enum populated when a row description message ('T') is received. one value for each cell in the row. emptied on 'C'
     this.transactionBlock
@@ -41,28 +83,53 @@ class Client extends EventEmitter {
     this.secretKey
     this.options = options
     this.connected = false
-    this.readyForQuery = false
+    this._changeStatus('connecting')
     this.client = net.connect(options, (err) => {
       if (err) throw err
       this.connected = true
+      this._changeStatus('connected')
+      this._changeStatus('authenticating')
       this.client.write(Buffer.from(fullStartupMessage.replace(/ /g, ''), 'hex'))
-      while (this.queryQueue.length) {
-        this.query(this.queryQueue.shift())
-      }
+      this.client.on('data', this._handleAuth.bind(this))
     })
     this.buffer = Buffer.from([])
     this.client.on('error', (e) => this.emit('error', e))
     this.client.on('close', () => {this.connected = false})
     this.client.on('disconnect', () => {this.connected = false})
-    this.client.on('data', readBytes.bind(this))
+    this.on('readyForQuery', () => {
+      if (this.queryQueue.length) {
+        const query = this.queryQueue.shift();
+        query.run()
+      }
+    })
   }
 
   query(sql) {
-    if (this.connected) {
-      this.client.write(createQueryMessage(sql))
-    } else {
-      this.queryQueue.push(sql)
+    const query = new QueryResult(this, sql)
+    this.queryQueue.push(query)
+    return query
+  }
+
+  _handleAuth(data) {
+    let message = {payload: true} // initilize to true for first iteration
+    this.buffer = Buffer.concat([this.buffer, data], this.buffer.length + data.length)
+    while (message.payload) {
+      const t = parseBuffer(this.buffer)
+      message = t.shift()
+      this.buffer = t.shift()
+      if (message.payload) {
+        if (message.header === 'Z') {
+          this.client.removeAllListeners('data') // this is more aggressive than it needs to be
+          this._changeStatus('readyForQuery')
+        }
+      }
     }
+  }
+
+  _changeStatus(newStatus) {
+    this.emit('statusChange', this.status, newStatus)
+    this.status = newStatus
+    this.emit(newStatus)
   }
 }
 
@@ -174,20 +241,10 @@ function parseDataRow(messagePayload, self, testing) {
   }
 }
 
-function getClient(options) {
+function createClient(options) {
   return new Client(options)
 }
 
-
-// some setup exported for use in the CLI, uncomment for cli use
-// const client = getClient({port: 5433})
-// client.on('error', (e) => {console.log('got e', e)})
-// client.on('resultsRow', (d) => {console.log('got resultsRow:', JSON.stringify(d))})
-
-// module.exports = {
-//   getClient: getClient,
-//   client: client
-// }
 
 // TESTS
 test('commandComplete', () => {
@@ -245,3 +302,19 @@ test('parseDataRow', () => {
   const actual = parseDataRow(payload, self, 'testing')
   assert.deepEqual(actual, expected)
 })
+
+// some setup exported for use in the CLI, uncomment for cli use
+const client = createClient({port: 5433})
+client.on('statusChange', (oldStatus, newStatus) => {
+  console.log('status changed:', oldStatus, '->', newStatus)
+})
+const rows = client.query('select 1')
+const rows2 = client.query('select 9999')
+const rows3 = client.query('select 555')
+const rows4 = client.query('select 8888')
+
+module.exports = {
+  createClient: createClient,
+  client: client
+}
+
