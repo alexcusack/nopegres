@@ -8,20 +8,11 @@ const createQueryMessage  = pgUtils.createQueryMessage
 
 const QueryResult = require('./queryResult').QueryResult
 
-const initialStartupMessage = "0000 0008 04d2 162f"
-
-const clientConfigMessage = "0000 0041 0003 0000 " +
-"7573 6572 0061 6c65 7863 7573 6163 6b00 " +
-"6461 7461 6261 7365 0070 6f73 7467 7265 " +
-"7300 6170 706c 6963 6174 696f 6e5f 6e61 " +
-"6d65 0070 7371 6c00 00"
-
-const fullStartupMessage = initialStartupMessage.concat(clientConfigMessage)
-
 class Client extends EventEmitter {
-  constructor(options) {
+  constructor(options, config) {
     super()
     this.status = 'initilized'
+    this.clientConfig = config
     this.options = options
     this.serverConfig = {}
     this.authenticated
@@ -46,7 +37,8 @@ class Client extends EventEmitter {
       if (err) throw err
       this._changeStatus('connected')
       this._changeStatus('authenticating')
-      this.client.write(Buffer.from(fullStartupMessage.replace(/ /g, ''), 'hex'))
+      this.client.write(Buffer.from("0000000804d2162f", 'hex')) // TBD myster startup message
+      this.client.write(encodeConfig(this.clientConfig))
       this.client.on('data', this._handleAuth.bind(this))
       this.client.on('error', (e) => this.emit('error', e))
       this.client.on('close', () => this._changeStatus('disconnected'))
@@ -105,6 +97,18 @@ class Client extends EventEmitter {
   }
 }
 
+function encodeConfig(config) {
+  const numberOfKeys = Object.keys(config).length
+  const asString = Object.keys(config).reduce((string, key) => {
+    return string.concat(key, '\00', config[key], '\00')
+  }, '')
+  const buff = Buffer.alloc(4 + 2 + 2 + asString.length + 1) // 32bit int, 16 bit int, 2 mystery bytes, trailing null
+  buff.writeInt32BE(buff.length, 0) // subtract trailing null byte
+  buff.writeInt16BE(numberOfKeys, 4)
+  buff.write(asString.concat('\00'), 6 + 2) // 2 myster bytes that 00
+  return buff
+}
+
 function parseConfig(payload) {
   const asArray = payload.toString().split('\00')
   return asArray.reduce((map, _, index) => {
@@ -136,10 +140,11 @@ function updateAuthStatus(payload) {
 }
 
 
-function createClient(options) {
-  return new Client(options)
+function createClient(options, config) {
+  return new Client(options, config)
 }
 
 exports.createClient = createClient
 exports.parseConfig = parseConfig
+exports.encodeConfig = encodeConfig
 
