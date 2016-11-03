@@ -18,25 +18,13 @@ const clientConfigMessage = "0000 0041 0003 0000 " +
 
 const fullStartupMessage = initialStartupMessage.concat(clientConfigMessage)
 
-const messageHandlers = {
-  C: commandComplete,                          // command complete
-  D: parseDataRow,                             // data row
-  E: (payload, self) => {console.log('got error'); self.emit('error', payload)}, // todo!
-  I: (payload, self) => {},                    // EmptyQueryResponse or command complete
-  K: parseCancellationKey,                     // cancellation key data
-  R: updateAuthStatus,                         // authentication request. 0 for success
-  S: (payload, self) => {},                    // status messages, save these on client
-  T: parseRowDescription,                      // row description
-  Z: readyForQuery,                            // ready for query
-}
-
 
 class QueryResult extends EventEmitter {
   constructor(Client, sql) {
     super()
     this.client = Client
-    this.connection = Client.client // this.client = socket connection
-    this.sql = sql
+    this.connection = Client.client // read/write socket connection
+    this.sql = sql                  // sql statement for this query
     this.rowDescriptions = []
     this.buffer = Buffer.from([])
   }
@@ -59,8 +47,23 @@ class QueryResult extends EventEmitter {
   }
 
   handleMessage(message) {
-    console.log('query res:', message.header, message.payload.toString())
     switch (message.header) {
+      case 'I': // empty query response
+      case 'C':
+        this.rowDescriptions = []
+        this.emit('commandComplete', commandComplete(message.payload))
+        break;
+      case 'D':
+        const row = parseDataRow(message.payload, this.rowDescriptions)
+        this.emit('resultRow', row)
+        break;
+      case 'E':
+        console.log('error', message.payload.toString())
+        this.emit('error', message.payload)
+        break;
+      case 'T':
+        this.rowDescriptions = parseRowDescription(message.payload)
+        break;
       case 'Z':
         this.emit('done')
         this.client.client.removeAllListeners('data')
@@ -75,27 +78,26 @@ class Client extends EventEmitter {
   constructor(options) {
     super()
     this.status = 'initilized'
-    this.queryQueue = []
-    this.rowDescriptions = [] // enum populated when a row description message ('T') is received. one value for each cell in the row. emptied on 'C'
-    this.transactionBlock
-    this.authentication
+    this.options = options
+    this.serverConfig = {}
+    this.authenticated
     this.processID
     this.secretKey
-    this.options = options
-    this.connected = false
+    this.queryQueue = []
     this._changeStatus('connecting')
+    this.buffer = Buffer.from([])
     this.client = net.connect(options, (err) => {
       if (err) throw err
-      this.connected = true
       this._changeStatus('connected')
       this._changeStatus('authenticating')
       this.client.write(Buffer.from(fullStartupMessage.replace(/ /g, ''), 'hex'))
       this.client.on('data', this._handleAuth.bind(this))
     })
-    this.buffer = Buffer.from([])
+
     this.client.on('error', (e) => this.emit('error', e))
-    this.client.on('close', () => {this.connected = false})
-    this.client.on('disconnect', () => {this.connected = false})
+    this.client.on('close', () => this._changeStatus('disconnected'))
+    this.client.on('disconnect', () => this._changeStatus('disconnected'))
+
     this.on('readyForQuery', () => {
       if (this.queryQueue.length) {
         const query = this.queryQueue.shift();
@@ -117,11 +119,28 @@ class Client extends EventEmitter {
       const t = parseBuffer(this.buffer)
       message = t.shift()
       this.buffer = t.shift()
-      if (message.payload) {
-        if (message.header === 'Z') {
+      switch (message.header) {
+        case 'K':
+          this.processID = message.payload.readInt32BE(0)
+          this.secretKey = message.payload.readInt32BE(4)
+          break;
+        case 'N':
+          break;
+        case 'R':
+          this.authenticated = updateAuthStatus(message.payload)
+          break;
+        case 'S':
+          this.serverConfig = Object.assign({}, this.serverConfig, parseConfig(message.payload))
+          break;
+        case 'Z':
           this.client.removeAllListeners('data') // this is more aggressive than it needs to be
           this._changeStatus('readyForQuery')
-        }
+          break;
+        default:
+          message.header ?
+            console.log('missed header', message.header, (message.payload || '').toString()) :
+            null // do nothing
+          break;
       }
     }
   }
@@ -132,6 +151,17 @@ class Client extends EventEmitter {
     this.emit(newStatus)
   }
 }
+
+function parseConfig(payload) {
+  const asArray = payload.toString().split('\00')
+  return asArray.reduce((map, _, index) => {
+    if (index % 2 !== 0) {
+      map[asArray[index - 1]] = asArray[index]
+    }
+    return map
+  }, {})
+}
+
 
 function readBytes(data) {
   // fires on data event, continues to parse messages while full messages are found
@@ -149,39 +179,21 @@ function readBytes(data) {
   }
 }
 
-function parseCancellationKey(messagePayload, self) {
-  // stores processID and secretKey which are used when sending a cancellation
-  // request to the server
-  self.processID = messagePayload.readInt32BE(0)
-  self.secretKey = messagePayload.readInt32BE(4)
+function updateAuthStatus(payload) {
+  return payload.readInt32BE(0) === 0
 }
 
-function updateAuthStatus(payload, self) {
-  // updates Client authentication status to success or failed
-  self.authentication = payload.readInt32BE(0) === 0 ?
-    'sucess' :
-    'failed'
-}
-
-function readyForQuery(payload, self) {
-  // updates client ready status and transaction block status to...
-  // I = idle
-  // T = server is in transaction block
-  // E = error occured in the transaction
-  self.readyForQuery = true
-  self.transactionBlock = payload.toString()
-}
-
-function parseRowDescription(messagePayload, self) {
+function parseRowDescription(messagePayload) {
   // mutates client.rowDescription via self (arg)
   // adds an object of attributes for each value in the to be received rows
   const fieldsPerRow = messagePayload.readInt16BE(0)
   messagePayload = messagePayload.slice(2) // remove first two bytes
+  const descriptions = []
   for (let i = 0; i < fieldsPerRow; ++i) {
     const t = columnName(messagePayload)
     const fieldName = t.shift()
     messagePayload = t.shift()
-    self.rowDescriptions.push({
+    descriptions.push({
       fieldName: fieldName,
       tableID: messagePayload.readInt32BE(0),
       attributeNumber: messagePayload.readInt16BE(4),
@@ -191,13 +203,11 @@ function parseRowDescription(messagePayload, self) {
       formatCode: messagePayload.readInt16BE(16), // 0 = text; 1 = binary;
     })
   }
+  return descriptions
 }
 
-function commandComplete(payload, self) {
-  // command complete, reset rowDescription to empty
-  self.rowDescriptions = []; // reset row descriptions state
-  const completedCommand = payload.toString('utf8')
-  // console.log('finished', completedCommand) emit?
+function commandComplete(payload) {
+  return payload.toString('utf8')
 }
 
 function columnName(buffer) {
@@ -213,15 +223,15 @@ function columnName(buffer) {
   return [str, buffer.slice(i + 1)]
 }
 
-function parseDataRow(messagePayload, self, testing) {
+function parseDataRow(messagePayload, rowDescriptions) {
   const numberOfColumns = messagePayload.readInt16BE(0)
   messagePayload = messagePayload.slice(2)                    // remove initial 16bit int indicating # of columns
   const row = {}
   for (let i = 0; i < numberOfColumns; ++i) {
     const columnLength = messagePayload.readInt32BE()
-    const fieldName    = self.rowDescriptions[i].fieldName
-    const formatCode   = self.rowDescriptions[i].formatCode
-    const value        = columnLength > -1 ?                // -1 if null value, no follow on bytes
+    const fieldName    = rowDescriptions[i].fieldName
+    const formatCode   = rowDescriptions[i].formatCode
+    const value        = columnLength > -1 ?                 // -1 if null value, no follow on bytes
                           messagePayload.slice(4, 4 + columnLength) :
                           null
     if (value) {
@@ -234,11 +244,7 @@ function parseDataRow(messagePayload, self, testing) {
     }
   }
 
-  if (testing) {
-    return row
-  } else {
-    self.emit('resultsRow', row)
-  }
+  return row
 }
 
 function createClient(options) {
@@ -249,11 +255,16 @@ function createClient(options) {
 // TESTS
 test('commandComplete', () => {
   const payload = Buffer.from('53454c454354203100', 'hex')
-  const sampleClient = {
-    rowDescriptions: ['non-empty']
-  }
-  commandComplete(Buffer.from('53454c454354203100', 'hex'), sampleClient)
-  assert.equal(sampleClient.rowDescriptions.length, 0)
+  const expected = 'SELECT 1\000'
+  const actual = commandComplete(Buffer.from('53454c454354203100', 'hex'))
+  assert.equal(actual, expected)
+})
+
+test('parse config', () => {
+  const payload = Buffer.from('54696d655a6f6e650055532f5061636966696300', 'hex')
+  const expected = {TimeZone: 'US/Pacific'}
+  const actual = parseConfig(payload)
+  assert.deepEqual(actual, expected)
 })
 
 test('columnName parsing', () => {
@@ -267,39 +278,33 @@ test('columnName parsing', () => {
 
 test('parseRowDescription', () => {
   const payload = Buffer.from('00013f636f6c756d6e3f00000000000000000000170004ffffffff0000', 'hex')
-  const expectedSelf = {
-    rowDescriptions: [{
-      fieldName: '?column?',
-      tableID: 0,
-      attributeNumber: 0,
-      fieldDataTypeID: 23,
-      fieldTypeSize: 4,
-      typeModifier: -1,
-      formatCode: 0
-    }]
-  }
-  const actualSelf = {rowDescriptions: []}
-  // mutates `actualSelf`
-  parseRowDescription(payload, actualSelf)
-  assert.deepEqual(expectedSelf, actualSelf)
+  const expected = [{
+    fieldName: '?column?',
+    tableID: 0,
+    attributeNumber: 0,
+    fieldDataTypeID: 23,
+    fieldTypeSize: 4,
+    typeModifier: -1,
+    formatCode: 0
+  }]
+  const actual = parseRowDescription(payload)
+  assert.deepEqual(actual, expected)
 })
 
 
 test('parseDataRow', () => {
   const payload = Buffer.from('00010000000131', 'hex')
-  const self = { // sample state of client going into parseDataRow function
-    rowDescriptions: [{
-      fieldName: '?column?',
-      tableID: 0,
-      attributeNumber: 0,
-      fieldDataTypeID: 23,
-      fieldTypeSize: 4,
-      typeModifier: -1,
-      formatCode: 0
-    }]
-  }
+  const rowDescriptions = [{
+    fieldName: '?column?',
+    tableID: 0,
+    attributeNumber: 0,
+    fieldDataTypeID: 23,
+    fieldTypeSize: 4,
+    typeModifier: -1,
+    formatCode: 0
+  }]
   const expected = {'?column?': '1'}
-  const actual = parseDataRow(payload, self, 'testing')
+  const actual = parseDataRow(payload, rowDescriptions)
   assert.deepEqual(actual, expected)
 })
 
