@@ -28,19 +28,8 @@ class Client extends EventEmitter {
     this.processID
     this.secretKey
     this.queryQueue = []
-    this._changeStatus('connecting')
     this.buffer = Buffer.from([])
-    this.client = net.connect(options, (err) => {
-      if (err) throw err
-      this._changeStatus('connected')
-      this._changeStatus('authenticating')
-      this.client.write(Buffer.from(fullStartupMessage.replace(/ /g, ''), 'hex'))
-      this.client.on('data', this._handleAuth.bind(this))
-    })
-
-    this.client.on('error', (e) => this.emit('error', e))
-    this.client.on('close', () => this._changeStatus('disconnected'))
-    this.client.on('disconnect', () => this._changeStatus('disconnected'))
+    this.connect(options)
 
     this.on('readyForQuery', () => {
       if (this.queryQueue.length) {
@@ -50,14 +39,25 @@ class Client extends EventEmitter {
     })
   }
 
-  end() {
-    this.client.end()
+  connect(options) {
+    this._changeStatus('connecting')
+    options = options || this.options
+    this.client = net.connect(options, (err) => {
+      if (err) throw err
+      this._changeStatus('connected')
+      this._changeStatus('authenticating')
+      this.client.write(Buffer.from(fullStartupMessage.replace(/ /g, ''), 'hex'))
+      this.client.on('data', this._handleAuth.bind(this))
+      this.client.on('error', (e) => this.emit('error', e))
+      this.client.on('close', () => this._changeStatus('disconnected'))
+      this.client.on('disconnect', () => this._changeStatus('disconnected'))
+    })
   }
 
-  query(sql) {
-    const query = new QueryResult(this, sql)
-    this.queryQueue.push(query)
-    return query
+  _changeStatus(newStatus) {
+    this.emit('statusChange', this.status, newStatus)
+    this.status = newStatus
+    this.emit(newStatus)
   }
 
   _handleAuth(data) {
@@ -93,10 +93,15 @@ class Client extends EventEmitter {
     }
   }
 
-  _changeStatus(newStatus) {
-    this.emit('statusChange', this.status, newStatus)
-    this.status = newStatus
-    this.emit(newStatus)
+  end() {
+    this.client.end()
+  }
+
+  query(sql) {
+    if (this.status === 'disconnected') throw 'Client is no longer connected'
+    const query = new QueryResult(this, sql)
+    this.queryQueue.push(query)
+    return query
   }
 }
 

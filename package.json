@@ -1,0 +1,22 @@
+{
+  "name": "nopegres",
+  "version": "0.0.1",
+  "description": "zero dependency postgres driver",
+  "main": "index.js",
+  "scripts": {
+    "test": "ls *.test.js | xargs -L1 node"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alexcusack/nopegres.git"
+  },
+  "keywords": [
+    "postgres"
+  ],
+  "author": "Alex Cusack",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/alexcusack/nopegres/issues"
+  },
+  "homepage": "https://github.com/alexcusack/nopegres#readme"
+}
