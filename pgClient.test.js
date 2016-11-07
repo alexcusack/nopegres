@@ -42,12 +42,14 @@ pgClientConfig = {
   user: 'alexcusack',
   database: 'postgres',
   application_name: 'psql',
+  port: 5433
 }
 
-const client = createClient({port: 5433}, pgClientConfig)
+const client = createClient(pgClientConfig)
 client.on('statusChange', (oldStatus, newStatus) => {
   console.log('status changed:', oldStatus, '->', newStatus)
 })
+client.connect()
 const rows = client.query('select 1')
 rows.on('row', (row) => {
   // console.log('Row: ', row)

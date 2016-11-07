@@ -24,9 +24,7 @@ exports.QueryResult = class QueryResult extends EventEmitter {
     let message = {payload: true} // initilize to true for first iteration
     this.buffer = Buffer.concat([this.buffer, data], this.buffer.length + data.length)
     while (message.payload) {
-      const t = parseBuffer(this.buffer)
-      message = t.shift()
-      this.buffer = t.shift()
+      [message, this.buffer] = parseBuffer(this.buffer)
       if (message.payload) this.handleMessage(message)
     }
   }

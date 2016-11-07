@@ -8,18 +8,16 @@ const createQueryMessage  = pgUtils.createQueryMessage
 const QueryResult = require('./queryResult').QueryResult
 
 class Client extends EventEmitter {
-  constructor(options, config) {
+  constructor(config) {
     super()
     this.status = 'initialized'
     this.clientConfig = config
-    this.options = options
     this.serverConfig = {}
     this.authenticated
     this.processID
     this.secretKey
     this.queryQueue = []
     this.buffer = Buffer.from([])
-    this.connect(options)
 
     this.on('readyForQuery', () => {
       if (this.queryQueue.length) {
@@ -29,19 +27,21 @@ class Client extends EventEmitter {
     })
   }
 
-  connect(options) {
+  connect() {
     this._changeStatus('connecting')
-    options = options || this.options
-    this.client = net.connect(options, (err) => {
-      if (err) this.emit('error', err)
-      this._changeStatus('connected')
+    this.client = net.connect({port: this.clientConfig.port}, (err) => {
+      if (err) {
+        this.emit('error', err)
+        return
+      }
       this.client.on('data', this._handleAuth.bind(this))
-      this.client.on('error', (e) => this.emit('error', e))
       this.client.on('close', () => this._changeStatus('disconnected'))
       this.client.on('disconnect', () => this._changeStatus('disconnected'))
-      this.client.write(Buffer.from("0000000804d2162f", 'hex')) // TBD mystery startup message
+      this._changeStatus('connected')
+      this.client.write(Buffer.from("0000000804d2162f", 'hex')) // mystery startup message
       this.client.write(encodeConfig(this.clientConfig))
     })
+    this.client.on('error', (e) => this.emit('error', e))
   }
 
   _changeStatus(newStatus) {
@@ -54,9 +54,7 @@ class Client extends EventEmitter {
     let message = {payload: true} // initilize to true for first iteration
     this.buffer = Buffer.concat([this.buffer, data], this.buffer.length + data.length)
     while (message.payload) {
-      const t = parseBuffer(this.buffer)
-      message = t.shift()
-      this.buffer = t.shift()
+      [message, this.buffer] = parseBuffer(this.buffer)
       switch (message.header) {
         case 'K':
           this.processID = message.payload.readInt32BE(0)
@@ -89,7 +87,10 @@ class Client extends EventEmitter {
   }
 
   query(sql) {
-    if (this.status === 'disconnected') throw 'Client is no longer connected'
+    if (this.status === 'disconnected') {
+      this.emit('error', 'client is no longer connected')
+      return;
+    }
     const query = new QueryResult(this, sql)
     this.queryQueue.push(query)
     return query
@@ -97,13 +98,18 @@ class Client extends EventEmitter {
 }
 
 function encodeConfig(config) {
-  const numberOfKeys = Object.keys(config).length
+  config = Object.keys(config).reduce((c, k) => {
+    // filter connection related params out
+    if (['port', 'host'].indexOf(k) > -1) return c
+    c[k] = config[k]
+    return c
+  }, {})
   const asString = Object.keys(config).reduce((string, key) => {
     return string.concat(key, '\00', config[key], '\00')
   }, '')
   const buff = Buffer.alloc(4 + 2 + 2 + asString.length + 1) // 32bit int, 16 bit int, 2 mystery bytes, trailing null
   buff.writeInt32BE(buff.length, 0)
-  buff.writeInt16BE(numberOfKeys, 4)
+  buff.writeInt16BE(Object.keys(config).length, 4)
   buff.write(asString.concat('\00'), 6 + 2) // 2 mystery bytes
   return buff
 }
