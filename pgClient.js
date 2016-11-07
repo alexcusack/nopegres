@@ -1,4 +1,3 @@
-// 'use strict'
 const EventEmitter        = require('events');
 const net                 = require('net')
 const assert              = require('assert')
@@ -11,7 +10,7 @@ const QueryResult = require('./queryResult').QueryResult
 class Client extends EventEmitter {
   constructor(options, config) {
     super()
-    this.status = 'initilized'
+    this.status = 'initialized'
     this.clientConfig = config
     this.options = options
     this.serverConfig = {}
@@ -34,15 +33,14 @@ class Client extends EventEmitter {
     this._changeStatus('connecting')
     options = options || this.options
     this.client = net.connect(options, (err) => {
-      if (err) throw err
+      if (err) this.emit('error', err)
       this._changeStatus('connected')
-      this._changeStatus('authenticating')
-      this.client.write(Buffer.from("0000000804d2162f", 'hex')) // TBD myster startup message
-      this.client.write(encodeConfig(this.clientConfig))
       this.client.on('data', this._handleAuth.bind(this))
       this.client.on('error', (e) => this.emit('error', e))
       this.client.on('close', () => this._changeStatus('disconnected'))
       this.client.on('disconnect', () => this._changeStatus('disconnected'))
+      this.client.write(Buffer.from("0000000804d2162f", 'hex')) // TBD mystery startup message
+      this.client.write(encodeConfig(this.clientConfig))
     })
   }
 
@@ -65,6 +63,7 @@ class Client extends EventEmitter {
           this.secretKey = message.payload.readInt32BE(4)
           break;
         case 'N':
+          this._changeStatus('authenticating')
           break;
         case 'R':
           this.authenticated = updateAuthStatus(message.payload)
@@ -103,9 +102,9 @@ function encodeConfig(config) {
     return string.concat(key, '\00', config[key], '\00')
   }, '')
   const buff = Buffer.alloc(4 + 2 + 2 + asString.length + 1) // 32bit int, 16 bit int, 2 mystery bytes, trailing null
-  buff.writeInt32BE(buff.length, 0) // subtract trailing null byte
+  buff.writeInt32BE(buff.length, 0)
   buff.writeInt16BE(numberOfKeys, 4)
-  buff.write(asString.concat('\00'), 6 + 2) // 2 myster bytes that 00
+  buff.write(asString.concat('\00'), 6 + 2) // 2 mystery bytes
   return buff
 }
 
@@ -117,22 +116,6 @@ function parseConfig(payload) {
     }
     return map
   }, {})
-}
-
-function readBytes(data) {
-  // fires on data event, continues to parse messages while full messages are found
-  let t;
-  let message;
-  this.buffer = Buffer.concat([this.buffer, data], this.buffer.length + data.length)
-  t = parseBuffer(this.buffer)
-  message = t.shift()
-  this.buffer = t.shift()
-  while(message.payload) {
-    messageHandlers[message.header](message.payload, this)
-    t = parseBuffer(this.buffer)
-    message = t.shift()
-    this.buffer = t.shift()
-  }
 }
 
 function updateAuthStatus(payload) {

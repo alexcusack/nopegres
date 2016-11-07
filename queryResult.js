@@ -5,10 +5,10 @@ const NULL_BYTE_LENGTH = 1
 const INT_32_LENGTH = 4
 
 exports.QueryResult = class QueryResult extends EventEmitter {
-  constructor(Client, sql) {
+  constructor(client, sql) {
     super()
-    this.client = Client
-    this.connection = Client.client // read/write socket connection
+    this.client = client
+    this.connection = client.client // read/write socket connection
     this.sql = sql                  // sql statement for this query
     this.rowDescriptions = []
     this.buffer = Buffer.from([])

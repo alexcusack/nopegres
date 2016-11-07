@@ -16,36 +16,27 @@ Wait, then why did you make this?
 `npm test`
 
 ####Use
-* Open a console and enter the following commands
+* Experiment with this library with a temporary postgres instance so any mistakes won't mess up your data
 ```
 $ cd /tmp
 $ initdb pgfiles
 $ postgres -D pgfiles -h localhost -p 5433
 ```
 
-* In a separate session, `cd` to the project root directory and open a Node REPL (v6.x.x^)
+* In a separate session:
 ```
-$ pg = require('./index')
-
-// { createClient: [Function: createClient],
-//   parseConfig: [Function: parseConfig],
-//   encodeConfig: [Function: encodeConfig] }
-
-$ client = pg.createClient({port: 5433}, {user: '<username>', database: 'postgres', application_name: 'psql'})
-
-// Client {....}
-// Returns a Client Event Emitter that wraps a socket
-
-$ client.query('select 1')
-
-// QueryResult {...}
-// Returns a QueryResult Event Emitter that will emit 'row' events has rows are returned from the
-// Postgres server
-
-$ client.end()
-// closes socket
-
-$ client.status
+$ cd path/to/nopegres
+$ node
+> pg = require('./index')
+> conf = { port: 5433, user: process.env.USER, database: 'postgres', application_name: 'psql' }
+> client = pg.createClient(conf)
+Client {...}
+> res = client.query('select x from values (1)')
+QueryResult {...}
+> res.on("row", (row) => console.log(row))
+{ x: 1 }
+> client.end()
+> client.status
 'disconnected'
 ```
 
