@@ -5,12 +5,13 @@ zero dependency Node/Javascript driver for Postgres
 ####Why is this called `nopegres`?
 * Because the answer to 'does this do x', is likely 'nope'
 * Client pooling? Nope.
-* Known third-party test framework? Nope.
-* Any dependencies at all? Nope.
+* SSL? Nope.
+* Automatic reconnects? Nope.
+
 
 Wait, then why did you make this?
 * For fun.
-* ..But also to experience implementing a binary protocol and better understanding of the Postgres API specifically
+* ..But mostly to play with implementing a binary protocol and better understand of the Postgres API specifically
 
 ####Test
 `npm test`
