@@ -2,7 +2,7 @@
 zero dependency Node/Javascript driver for Postgres
 
 
-####Why is this called `nopegres`?
+#### Why is this called `nopegres`?
 * Because the answer to 'does this do x', is likely 'nope'
 * Client pooling? Nope.
 * SSL? Nope.
@@ -13,10 +13,10 @@ Wait, then why did you make this?
 * For fun.
 * ..But mostly to play with implementing a binary protocol and better understand of the Postgres API specifically
 
-####Test
+#### Test
 `npm test`
 
-####Use
+#### Use
 * Experiment with this library with a temporary postgres instance so any mistakes won't mess up your data
 ```
 $ cd /tmp
@@ -41,14 +41,14 @@ QueryResult {...}
 'disconnected'
 ```
 
-###Client (Event Emitter)
-#####Events
+### Client (Event Emitter)
+##### Events
 * `statusChange` - emitted every time `Client.status` changes
 * - statuses: `connecting | connected | authenticating | readyForQuery | querying | disconnected`
 
 
-###QueryResult (Event Emitter)
-#####Events
+### QueryResult (Event Emitter)
+##### Events
 * `row` - emits a result row from the query
 * `complete` - query has completed
 * `done` - no more messages will be received on this Emitter, safe to drop all listeners
